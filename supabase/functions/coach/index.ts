@@ -40,7 +40,7 @@ const RULES = `你是一位專門教「台灣成人初學者」的英文教練�
 【絕對遵守的教學方法，不得改成一般教學】
 1. 熟練度導向：用「能完成哪些生活/工作任務」衡量，不是考試。
 2. 可理解輸入 95%：學生在 A1–A2 時，每句英文不超過 8 個字，只用最常用 1000 字加上「當週主題」必要的字。B1 才可放寬到 12 字。不用成語、不用俚語、不用難字。
-3. FSI 操練：四類句型操練。substitution＝代換（換一個字）、transformation＝變化（肯定↔否定↔問句、單數↔複數、時態）、response＝應答（聽到問句要回答）、expansion＝擴展（加時間/地點/原因）。材料只能來自當週主題與核心句型。
+3. FSI 操練：重點是「答快，不是答對」，練到不假思索的反射。四類句型操練。substitution＝代換（換一個字）、transformation＝變化（肯定↔否定↔問句、單數↔複數、時態）、response＝應答（聽到問句要回答）、expansion＝擴展（加時間/地點/原因）。材料只能來自當週主題與核心句型。
 4. 間隔重複：單字卡與句子卡，只收學生練習中遇到或答錯的句子。每日新字上限由狀態區給定，不得超過。
 5. 衝刺：目前位於狀態區所列的階段與週主題，不要跳到其他主題。
 6. 用英文做事：產出任務由學生自己寫，你只修正、不代寫整段；可以給「更自然的說法」示範一句。
@@ -94,7 +94,7 @@ const S = {
   },
   lesson_generate: {
     type: "object", additionalProperties: false,
-    required: ["title_zh", "grammar_point", "dialogue", "vocab", "questions", "drills", "output_task"],
+    required: ["title_zh", "grammar_point", "dialogue", "vocab", "questions", "patterns", "extra_drills", "reading_passage", "output_task"],
     properties: {
       title_zh: { type: "string" },
       grammar_point: { type: "object", additionalProperties: false, required: ["title_zh", "explain_zh", "examples"],
@@ -102,7 +102,14 @@ const S = {
       dialogue: { type: "array", minItems: 6, maxItems: 10, items: { type: "object", additionalProperties: false, required: ["speaker", "en", "zh"], properties: { speaker: { type: "string" }, en: { type: "string" }, zh: { type: "string" } } } },
       vocab: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "zh", "example_en"], properties: { en: { type: "string" }, zh: { type: "string" }, example_en: { type: "string" } } } },
       questions: { type: "array", minItems: 3, maxItems: 3, items: { type: "object", additionalProperties: false, required: ["q_en", "q_zh", "options", "answer_index"], properties: { q_en: { type: "string" }, q_zh: { type: "string" }, options: { type: "array", minItems: 3, maxItems: 3, items: { type: "string" } }, answer_index: { type: "integer", minimum: 0, maximum: 2 } } } },
-      drills: { type: "array", minItems: 5, maxItems: 8, items: { type: "object", additionalProperties: false, required: ["type", "instruction_zh", "prompt_en", "answer_en", "pattern"], properties: { type: { type: "string", enum: ["substitution", "transformation", "response", "expansion"] }, instruction_zh: { type: "string" }, prompt_en: { type: "string" }, answer_en: { type: "string" }, pattern: { type: "string", description: "句型標籤，例如 I am + 國家" } } } },
+      patterns: { type: "array", minItems: 2, maxItems: 3, description: "FSI 句型快答：每個句型先代換 20 次再轉換 10 次", items: { type: "object", additionalProperties: false, required: ["label", "base_en", "base_zh", "substitution", "transformation"], properties: {
+        label: { type: "string", description: "句型標籤，例如 I am from + 地方" },
+        base_en: { type: "string" }, base_zh: { type: "string" },
+        substitution: { type: "array", minItems: 20, maxItems: 20, items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "提示詞，1 到 3 個字，例如 Japan / She / not" }, answer: { type: "string", description: "套進去之後的完整句子" } } } },
+        transformation: { type: "array", minItems: 10, maxItems: 10, items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "轉換指令，用中文短詞，例如 問句 / 否定 / 他 / 複數 / 過去" }, answer: { type: "string" } } } },
+      } } },
+      extra_drills: { type: "array", minItems: 4, maxItems: 6, items: { type: "object", additionalProperties: false, required: ["type", "instruction_zh", "prompt_en", "answer_en", "pattern"], properties: { type: { type: "string", enum: ["response", "expansion"] }, instruction_zh: { type: "string" }, prompt_en: { type: "string" }, answer_en: { type: "string" }, pattern: { type: "string" } } } },
+      reading_passage: { type: "object", additionalProperties: false, required: ["title_zh", "sentences"], properties: { title_zh: { type: "string" }, sentences: { type: "array", minItems: 6, maxItems: 8, items: { type: "object", additionalProperties: false, required: ["en", "zh"], properties: { en: { type: "string" }, zh: { type: "string" } } } } } },
       output_task: { type: "object", additionalProperties: false, required: ["scene_zh", "scene_en", "starter_en"], properties: { scene_zh: { type: "string" }, scene_en: { type: "string" }, starter_en: { type: "string", description: "對方先講的一句英文" } } },
     },
   },
@@ -154,14 +161,16 @@ function buildPrompt(action: string, p: any, profile: Profile): { user: string; 
 學生寫的英文：「${p.writing?.user_en ?? ""}」
 請給：CEFR（只能 A1/A2/B1）、閱讀分數、閱讀與寫作的具體回饋、聽說讀寫各一句弱點判斷、建議起點（start_stage 一律 1，start_week 一律 1，除非字彙量 ≥ 1500 且寫作流暢才可 start_week 2）、一段 3 句內的總結（鼓勵但誠實）、以及最多 6 張值得先收的卡片（從學生寫錯或該學的句子來）。` };
     case "lesson_generate":
-      return { schema: S.lesson_generate, max_tokens: 8000, effort: "medium",
+      return { schema: S.lesson_generate, max_tokens: 14000, effort: "medium",
         user: `請生成今天的課程（第 ${p.day_in_week ?? 1} 天，本週已學過的字：${JSON.stringify(p.learned_words ?? [])}，請不要重複教這些字）。
 1. grammar_point：今天的小文法點，從本週核心句型挑一個，不用術語，用生活化比喻說明，3 個例句。
 2. dialogue：一段當週主題的生活對話 6 到 10 句，兩個人（用 A 和 B），每句不超過字數上限，附中文。
 3. vocab：今天的新單字，最多 ${Math.min(profile.daily_new_words, 12)} 個，從對話裡挑，附中文與一個例句。寧少而熟。
 4. questions：3 題理解題（用簡單英文問、附中文提示、3 選 1）。
-5. drills：5 到 8 題四類操練，四類都要出現至少一次，材料只用對話裡的句子與核心句型；${p.day_in_week && p.day_in_week > 1 ? "優先針對學生常錯句型。" : ""}
-6. output_task：一個真實情境讓學生用英文回應，給對方先講的一句英文。
+5. patterns：FSI 句型快答，2 到 3 個句型（從本週核心句型挑，${p.day_in_week && p.day_in_week > 1 ? "優先針對學生常錯句型，" : ""}每天換不同的）。每個句型給：基礎句 base_en（附中文）、substitution 代換 20 題（cue 是 1 到 3 個字的提示詞，學生要在 3 秒內把它套進句子，answer 是完整句；提示詞要連鎖變化，像 Japan → She → Korea → They → not → Taiwan…，每次只換一個位置，後一題接著前一題的句子變）、transformation 轉換 10 題（cue 用中文短指令：問句／否定／他／她／複數／過去／縮寫…，從 base_en 出發，answer 是完整句）。所有句子都要在字數上限內、只用學生懂的字。
+6. extra_drills：4 到 6 題應答（response）與擴展（expansion）操練，材料只用對話裡的句子與核心句型。
+7. reading_passage：一段給學生「大聲朗讀」的短文 6 到 8 句，當週主題、第一人稱或生活小故事，每句在字數上限內，附中文（預設不顯示）。
+8. output_task：一個真實情境讓學生用英文回應，給對方先講的一句英文。
 ${p.is_buffer ? "【注意】本週是緩衝週：對話與操練只能用前幾週學過的內容複習，vocab 給空陣列。" : ""}` };
     case "grade_drill":
       return { schema: S.grade_drill, max_tokens: 800, effort: "low",

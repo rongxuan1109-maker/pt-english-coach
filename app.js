@@ -154,7 +154,7 @@ function showPage(name) {
   S.page = name;
   $$('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + name));
   $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.page === name));
-  speechSynthesis?.cancel?.();
+  speechSynthesis?.cancel?.(); if (typeof stopDrillTimers === 'function') stopDrillTimers();
   ({ today: renderToday, assess: renderAssess, cards: renderCards, progress: renderProgress, settings: renderSettings })[name]?.();
 }
 $$('.tab').forEach(t => t.onclick = () => showPage(t.dataset.page));
@@ -204,20 +204,19 @@ async function renderToday() {
 }
 
 function stepsHTML(pr, cur) {
-  const names = [['review', '複習'], ['input', '輸入'], ['drill', '操練'], ['output', '產出']];
+  const names = [['review', '複習'], ['input', '輸入'], ['drill', '快答'], ['read', '朗讀'], ['output', '輸出']];
   return `<div class="steps">${names.map(([k, n]) => `<div class="step ${pr[k]?.done ? 'done' : cur === k ? 'on' : ''}">${n}${pr[k]?.done ? ' ✓' : ''}</div>`).join('')}</div>`;
 }
 async function saveProgress() { await sb.from('lessons').update({ progress: S.lesson.progress, content: S.lesson.content }).eq('id', S.lesson.id); }
 
 async function renderLesson(box, wi) {
   const L = S.lesson; const pr = L.progress || {}; L.progress = pr;
-  const cur = !pr.review?.done ? 'review' : !pr.input?.done ? 'input' : !pr.drill?.done ? 'drill' : !pr.output?.done ? 'output' : 'done';
+  const cur = !pr.review?.done ? 'review' : !pr.input?.done ? 'input' : !pr.drill?.done ? 'drill' : !pr.read?.done ? 'read' : !pr.output?.done ? 'output' : 'done';
   if (cur === 'done') return renderFinish(box, wi);
   if (cur === 'review') return renderReview(box, wi);
   // 需要課程內容
   if (!L.content?.dialogue) {
-    if (wi.days === 0 && !L.progress.review?.done) {}
-    box.innerHTML = stepsHTML(pr, cur) + `<div class="card"><h3>今天的課還沒準備好</h3><p class="hint" style="font-size:14px">老師會依你的程度與本週主題「${esc(wi.row?.topic_zh || '')}」準備一段對話、新單字、操練題和一個產出任務。</p><button class="btn full" id="genLesson">請老師準備今天的課</button></div>`;
+    box.innerHTML = stepsHTML(pr, cur) + `<div class="card"><h3>今天的課還沒準備好</h3><p class="hint" style="font-size:14px">老師會依你的程度與本週主題「${esc(wi.row?.topic_zh || '')}」準備一段對話、新單字、句型快答、朗讀短文和一個輸出任務。</p><button class="btn full" id="genLesson">請老師準備今天的課</button></div>`;
     $('#genLesson').onclick = async () => {
       try {
         const weekStart = addDays(todayStr(), -(wi.dayInWeek - 1));
@@ -230,6 +229,7 @@ async function renderLesson(box, wi) {
   }
   if (cur === 'input') return renderInput(box, wi);
   if (cur === 'drill') return renderDrill(box, wi);
+  if (cur === 'read') return renderReadAloud(box, wi);
   if (cur === 'output') return renderOutput(box, wi);
 }
 
@@ -312,47 +312,169 @@ function renderInput(box, wi) {
   });
 }
 
-/* 操練：四類 drill 一題一題 */
+/* ---------- 句型快答（FSI Pattern Drill：答快，不是答對） ---------- */
+function sim(a, b) { // 相似度 0..1（容忍語音辨識小誤差）
+  a = norm(a); b = norm(b); if (a === b) return 1; if (!a || !b) return 0;
+  const m = a.length, n = b.length, d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]); for (let j = 1; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return 1 - d[m][n] / Math.max(m, n);
+}
+const drillCfg = () => ({ limit: Number(S.profile.settings?.drill_limit ?? 3), reps: Number(S.profile.settings?.drill_reps ?? 20), autoMic: S.profile.settings?.auto_mic !== false && !!SR });
+let drillTimer = null, drillIv = null, drillRec = null;
+function stopDrillTimers() { clearTimeout(drillTimer); clearInterval(drillIv); drillTimer = drillIv = null; try { drillRec?.abort(); } catch {} drillRec = null; }
+
 function renderDrill(box, wi) {
-  const L = S.lesson, C = L.content, pr = L.progress; pr.drill = pr.drill || { idx: 0, results: [] };
-  const st = pr.drill, ds = C.drills;
-  if (st.idx >= ds.length) { pr.drill.done = true; saveProgress().then(() => { toast(`操練完成：${st.results.filter(Boolean).length} / ${ds.length} 一次就對`); renderLesson(box, wi); }); return; }
-  const d = ds[st.idx];
-  box.innerHTML = stepsHTML(pr, 'drill') + `<div class="card"><div class="row between"><div class="meta">操練 ${st.idx + 1} / ${ds.length}</div><span class="tag">${DRILL_ZH[d.type] || d.type}</span></div>
-    <div class="progress"><div style="width:${st.idx / ds.length * 100}%"></div></div>
-    <div style="margin:10px 0;font-size:15px">${esc(d.instruction_zh)}</div>
-    <div class="row between"><div class="en">${esc(d.prompt_en)}</div>${speakBtn(d.prompt_en)}</div>
-    <div class="row" style="margin-top:12px"><input class="text" id="dIn" placeholder="用英文回答…" autocomplete="off"><button class="mic" id="dMic">${MIC}</button></div>
-    <button class="btn full" id="dSubmit">送出</button><div id="dFb"></div></div>`;
-  $('#dMic').onclick = () => listen(t => { $('#dIn').value = t; }, $('#dMic'));
-  $('#dIn').onkeydown = e => { if (e.key === 'Enter') $('#dSubmit').click(); };
-  $('#dSubmit').onclick = async () => {
-    const a = $('#dIn').value.trim(); if (!a) return toast('先回答看看');
-    $('#dSubmit').disabled = true;
-    let g;
-    if (norm(a) === norm(d.answer_en)) g = { correct: true, feedback_zh: '完全正確！', correct_en: d.answer_en, correct_zh: '', pattern: d.pattern };
-    else { try { g = await coach('grade_drill', { drill: d, user_answer: a }, '老師在看你的答案…'); } catch (e) { toast(e.message, 5000); $('#dSubmit').disabled = false; return; } }
-    st.results.push(g.correct);
-    if (!g.correct) { await logError(g.pattern || d.pattern, a, g.correct_en); await addCards([{ kind: 'sentence', en: g.correct_en, zh: g.correct_zh || d.instruction_zh, context: `${DRILL_ZH[d.type]}操練：${d.prompt_en}` }], '操練答錯'); }
-    $('#dFb').innerHTML = `<div class="feedback ${g.correct ? 'good' : 'bad'}">${esc(g.feedback_zh)}
-      <div class="row between" style="margin-top:8px"><div class="en">${esc(g.correct_en)}</div>${speakBtn(g.correct_en)}</div>${g.correct_zh ? `<div class="zh">${esc(g.correct_zh)}</div>` : ''}
-      ${g.correct ? '' : `<div class="hint" style="margin-top:8px">請跟著唸一次（按麥克風或打字），這句已加進句子卡。</div><div class="row" style="margin-top:6px"><input class="text" id="rIn" placeholder="跟著唸…"><button class="mic" id="rMic">${MIC}</button></div><div id="rFb" class="hint"></div>`}
-      <button class="btn full sm" id="dNext">${g.correct ? '下一題' : '我唸好了，下一題'}</button></div>`;
-    speak(g.correct_en);
-    if (!g.correct) { $('#rMic').onclick = () => listen(t => { $('#rIn').value = t; $('#rFb').textContent = norm(t) === norm(g.correct_en) ? '很好，唸對了！' : '再聽一次、再唸一次試試。'; if (norm(t) !== norm(g.correct_en)) speak(g.correct_en); }, $('#rMic')); }
-    $('#dNext').onclick = async () => { st.idx++; await saveProgress(); renderDrill(box, wi); };
+  const L = S.lesson, C = L.content, pr = L.progress;
+  const cfg = drillCfg();
+  const pats = C.patterns || [];
+  // 題目佇列：每個句型 → 代換 N 題 → 轉換 10 題；最後應答/擴展
+  if (!pr.drill || !pr.drill.queue) {
+    const queue = [];
+    pats.forEach((pt, pi) => {
+      queue.push({ kind: 'intro', pi, phase: 'sub' });
+      pt.substitution.slice(0, cfg.reps).forEach(c => queue.push({ kind: 'cue', pi, phase: 'sub', cue: c.cue, answer: c.answer, label: pt.label }));
+      queue.push({ kind: 'intro', pi, phase: 'trans' });
+      pt.transformation.forEach(c => queue.push({ kind: 'cue', pi, phase: 'trans', cue: c.cue, answer: c.answer, label: pt.label }));
+    });
+    (C.extra_drills || []).forEach(d => queue.push({ kind: 'cue', phase: d.type, cue: d.prompt_en, instruction: d.instruction_zh, answer: d.answer_en, label: d.pattern, limit: cfg.limit + 2 }));
+    pr.drill = { queue, idx: 0, log: [], wrongs: [] };
+  }
+  const st = pr.drill;
+  stopDrillTimers();
+  if (st.idx >= st.queue.length) return finishDrill(box, wi);
+  const it = st.queue[st.idx];
+  const pt = it.pi != null ? pats[it.pi] : null;
+  const PHASE = { sub: '代換', trans: '轉換', response: '應答', expansion: '擴展' };
+  const total = st.queue.filter(q => q.kind === 'cue').length, doneN = st.log.length;
+  const fast = st.log.filter(l => l.fast).length;
+
+  if (it.kind === 'intro') {
+    box.innerHTML = stepsHTML(pr, 'drill') + `<div class="card"><div class="row between"><div class="meta">句型 ${it.pi + 1} / ${pats.length}</div><span class="tag">${PHASE[it.phase]}練習</span></div>
+      <h3 style="margin-top:8px">${it.phase === 'sub' ? '基礎句型，先聽一次、跟著唸一次' : '同一個句型，換成轉換練習'}</h3>
+      <div class="row between" style="margin:10px 0;padding:12px;background:var(--bg);border-radius:12px"><div><div class="en" style="font-size:22px">${esc(pt.base_en)}</div><div class="zh">${esc(pt.base_zh)}</div></div>${speakBtn(pt.base_en)}</div>
+      <div class="hint">${it.phase === 'sub' ? `接下來我會連續丟 ${Math.min(cfg.reps, pt.substitution.length)} 個提示詞，你把它套進句子、<b>${cfg.limit} 秒內</b>說出來。重點是答快，不是答對；錯了會閃一下正確句就往下。` : `接下來 ${pt.transformation.length} 個指令：問句、否定、換人稱…從基礎句變過去，一樣 ${cfg.limit} 秒內說出來。`}</div>
+      <div class="hint">${cfg.autoMic ? '麥克風會自動開，直接開口講。' : '這個瀏覽器沒有語音辨識，用打字＋Enter。'}</div>
+      <button class="btn full" id="go">開始快答</button></div>`;
+    speak(pt.base_en);
+    $('#go').onclick = async () => { st.idx++; await saveProgress(); renderDrill(box, wi); };
+    return;
+  }
+  // 題目
+  const limit = it.limit || cfg.limit;
+  box.innerHTML = stepsHTML(pr, 'drill') + `<div class="card">
+    <div class="row between"><div class="meta">${pt ? `句型 ${it.pi + 1}/${pats.length}・` : ''}${PHASE[it.phase]}　第 ${doneN + 1} / ${total} 題</div><div class="meta">快答率 ${doneN ? Math.round(fast / doneN * 100) : 0}%</div></div>
+    <div class="progress"><div style="width:${doneN / total * 100}%"></div></div>
+    ${pt ? `<div class="meta" style="margin-top:8px">基礎句：<span class="en" style="font-size:14px;font-weight:500">${esc(it.phase === 'sub' && st.lastAnswer?.pi === it.pi ? st.lastAnswer.en : pt.base_en)}</span></div>` : `<div style="margin-top:8px;font-size:14px">${esc(it.instruction || '')}</div>`}
+    <div style="text-align:center;margin:18px 0 10px"><div class="meta">${it.phase === 'sub' ? '提示詞' : it.phase === 'trans' ? '指令' : '對方說'}</div><div class="en" style="font-size:${pt ? 36 : 22}px;line-height:1.2">${esc(it.cue)}</div></div>
+    <div class="progress" style="height:6px"><div id="tbar" style="width:100%;transition:none"></div></div>
+    <div class="row" style="margin-top:12px"><input class="text" id="qIn" placeholder="說出來或打字…" autocomplete="off" autocapitalize="off"><button class="mic ${cfg.autoMic ? 'rec' : ''}" id="qMic">${MIC}</button></div>
+    <div id="qFb" style="min-height:64px;margin-top:8px"></div>
+    <div class="row between"><button class="btn ghost sm" id="qSkip">不會，看答案</button><button class="btn ghost sm" id="qPause">暫停</button></div></div>`;
+  const t0 = performance.now(); let answered = false; let speechAt = null;
+  const bar = $('#tbar');
+  const iv = setInterval(() => { const r = Math.max(0, 1 - (performance.now() - t0) / (limit * 1000)); bar.style.width = r * 100 + '%'; bar.style.background = r < .3 ? 'var(--danger)' : 'var(--warm)'; }, 50);
+  const slowTimer = setTimeout(() => { if (!answered) { toast(`超過 ${limit} 秒了，加快速度！不用想，直接講`, 1500); } }, limit * 1000);
+  drillTimer = slowTimer; drillIv = iv;
+  if (!pt) speak(it.cue, 1.0); else if (it.phase === 'sub') speak(it.cue, 1.0);
+
+  const settle = async (user, skipped = false) => {
+    if (answered) return; answered = true; clearInterval(iv); clearTimeout(slowTimer); try { drillRec?.abort(); } catch {} drillRec = null;
+    const ms = Math.round((speechAt ?? performance.now()) - t0);
+    const ok = !skipped && sim(user, it.answer) >= 0.8;
+    const fastOk = ms <= limit * 1000;
+    st.log.push({ label: it.label, phase: it.phase, cue: it.cue, answer: it.answer, user, correct: ok, ms, fast: fastOk && ok });
+    if (!ok) st.wrongs.push({ label: it.label, said: user, answer: it.answer, cue: it.cue, phase: PHASE[it.phase] });
+    if (it.phase === 'sub') st.lastAnswer = { pi: it.pi, en: it.answer };
+    $('#qFb').innerHTML = `<div class="feedback ${ok ? 'good' : 'bad'}" style="margin:0"><div class="row between"><div class="en">${esc(it.answer)}</div><span class="meta">${ok ? (fastOk ? '✓ 快又對' : '✓ 對，但慢了') : (skipped ? '看答案' : '✗ 再聽一次')}　${(ms / 1000).toFixed(1)}s</span></div>${!ok && user ? `<div class="hint">你說：${esc(user)}</div>` : ''}</div>`;
+    speak(it.answer, 1.0);
+    st.idx++;
+    if (st.idx % 5 === 0) saveProgress();
+    drillTimer = setTimeout(() => renderDrill(box, wi), ok ? 1100 : 2200);
   };
+  $('#qIn').onkeydown = e => { if (e.key === 'Enter') settle($('#qIn').value.trim()); };
+  $('#qIn').oninput = () => { if (!speechAt) speechAt = performance.now(); };
+  $('#qSkip').onclick = () => settle('', true);
+  $('#qPause').onclick = async () => { answered = true; stopDrillTimers(); await saveProgress(); box.innerHTML = stepsHTML(pr, 'drill') + `<div class="card"><h3>暫停中</h3><div class="hint">進度已存，隨時回來接著快答。</div><button class="btn full" id="resume">繼續</button></div>`; $('#resume').onclick = () => renderDrill(box, wi); };
+  const startMic = () => {
+    if (!SR) return;
+    try { drillRec?.abort(); } catch {}
+    const r = new SR(); r.lang = 'en-US'; r.interimResults = true; r.maxAlternatives = 3; drillRec = r;
+    r.onspeechstart = () => { if (!speechAt) speechAt = performance.now(); };
+    r.onresult = e => {
+      if (!speechAt) speechAt = performance.now();
+      const res = e.results[e.results.length - 1];
+      if (res.isFinal) { const alts = [...res].map(a => a.transcript); const best = alts.sort((a, b) => sim(b, it.answer) - sim(a, it.answer))[0]; $('#qIn').value = best; settle(best); }
+      else $('#qIn').value = res[0].transcript;
+    };
+    r.onerror = () => { $('#qMic').classList.remove('rec'); };
+    r.onend = () => { if (!answered) $('#qMic').classList.remove('rec'); };
+    try { r.start(); $('#qMic').classList.add('rec'); } catch { $('#qMic').classList.remove('rec'); }
+  };
+  $('#qMic').onclick = startMic;
+  if (cfg.autoMic) setTimeout(startMic, pt && it.phase === 'sub' ? 350 : 600); else $('#qIn').focus();
+}
+async function finishDrill(box, wi) {
+  const pr = S.lesson.progress, st = pr.drill;
+  if (!st.saved) {
+    const uniq = {}; st.wrongs.forEach(w => { uniq[norm(w.answer)] = w; });
+    for (const w of Object.values(uniq)) await logError(w.label, w.said, w.answer);
+    await addCards(Object.values(uniq).map(w => ({ kind: 'sentence', en: w.answer, zh: '', context: `${w.phase}快答：${w.cue}` })), '快答答錯');
+    st.saved = true;
+  }
+  const n = st.log.length, fast = st.log.filter(l => l.fast).length, ok = st.log.filter(l => l.correct).length;
+  const avg = n ? st.log.reduce((s, l) => s + l.ms, 0) / n / 1000 : 0;
+  st.stats = { n, fast, ok, avg: Number(avg.toFixed(2)) }; st.done = true; delete st.queue; await saveProgress();
+  box.innerHTML = stepsHTML(pr, 'drill') + `<div class="card"><h3>快答完成！</h3>
+    <div class="stat" style="margin-top:8px"><div class="card"><div class="meta">快答率（${drillCfg().limit} 秒內答對）</div><div class="big">${n ? Math.round(fast / n * 100) : 0}%</div></div><div class="card"><div class="meta">平均反應</div><div class="big">${avg.toFixed(1)}<span style="font-size:16px">s</span></div></div></div>
+    <div class="hint" style="margin-top:10px">共 ${n} 題，答對 ${ok} 題。答錯的 ${Object.keys(st.wrongs.length ? st.wrongs : {}).length ? st.wrongs.length + ' 句已進句子卡' : '沒有'}。快答率會一天一天往上，這就是反射在長出來。</div>
+    <button class="btn full" id="toRead">下一段：大聲朗讀</button></div>`;
+  $('#toRead').onclick = () => renderLesson(box, wi);
+}
+
+/* ---------- 大聲朗讀（不翻譯、不查字典，讓嘴巴習慣） ---------- */
+function renderReadAloud(box, wi) {
+  const L = S.lesson, C = L.content, pr = L.progress; pr.read = pr.read || { idx: 0, scores: [] };
+  const st = pr.read;
+  const R = C.reading_passage || { title_zh: '今天的對話', sentences: (C.dialogue || []).map(d => ({ en: d.en, zh: d.zh })) };
+  const ss = R.sentences;
+  if (st.idx >= ss.length) {
+    const avg = st.scores.length ? Math.round(st.scores.reduce((a, b) => a + b, 0) / st.scores.length) : null;
+    box.innerHTML = stepsHTML(pr, 'read') + `<div class="card"><h3>朗讀完成</h3>${avg != null ? `<div class="big">${avg}%</div><div class="meta">平均讀對比例（語音辨識估算，參考用）</div>` : ''}<div class="hint" style="margin-top:8px">最後再整段大聲讀一次，不看中文。</div>
+      <div style="margin-top:8px">${ss.map(x => `<div class="line"><div class="txt"><div class="en" style="font-size:15px;font-weight:500">${esc(x.en)}</div></div>${speakBtn(x.en)}</div>`).join('')}</div>
+      <button class="btn ghost full" id="playAll">聽整段範讀</button><button class="btn full" id="done">下一段：自由輸出</button></div>`;
+    $('#playAll').onclick = () => speakList(ss.map(x => x.en));
+    $('#done').onclick = async () => { st.done = true; st.avg = avg; await saveProgress(); renderLesson(box, wi); };
+    return;
+  }
+  const x = ss[st.idx];
+  box.innerHTML = stepsHTML(pr, 'read') + `<div class="card"><div class="row between"><div class="meta">大聲朗讀 ${st.idx + 1} / ${ss.length}・${esc(R.title_zh)}</div><button class="btn ghost sm" id="showZh">看中文</button></div>
+    <div class="progress"><div style="width:${st.idx / ss.length * 100}%"></div></div>
+    <div class="hint">先聽範讀，然後按麥克風、大聲讀出來。不翻譯、不查字典，讀得卡也沒關係。</div>
+    <div class="row between" style="margin:14px 0;padding:14px;background:var(--bg);border-radius:12px"><div class="en" style="font-size:22px;line-height:1.35">${esc(x.en)}</div>${speakBtn(x.en)}</div>
+    <div class="zh hidden" id="zh">${esc(x.zh)}</div>
+    <div class="row" style="margin-top:8px;justify-content:center;gap:16px"><button class="mic" id="rMic" style="width:64px;height:64px;border-radius:20px">${MIC}</button></div>
+    <div id="rFb" style="min-height:48px;margin-top:10px"></div>
+    <div class="row between"><button class="btn ghost sm" id="rAgain">再讀一次</button><button class="btn sm" id="rNext">下一句</button></div></div>`;
+  speak(x.en);
+  $('#showZh').onclick = () => $('#zh').classList.toggle('hidden');
+  let last = null;
+  const doListen = () => listen(t => { const sc = Math.round(sim(t, x.en) * 100); last = sc; $('#rFb').innerHTML = `<div class="feedback ${sc >= 80 ? 'good' : ''}" style="margin:0"><div class="meta">我聽到：</div>${esc(t)}<div class="meta">讀對比例約 ${sc}%${sc < 80 ? '，再聽一次範讀、再讀一次' : '，很棒'}</div></div>`; if (sc < 80) speak(x.en); }, $('#rMic'));
+  $('#rMic').onclick = doListen; $('#rAgain').onclick = doListen;
+  $('#rNext').onclick = async () => { if (last != null) st.scores.push(last); st.idx++; await saveProgress(); renderReadAloud(box, wi); };
 }
 
 /* 產出：真實情境用英文回應 */
-function renderOutput(box, wi) {
+function renderOutput(box, wi, mode) {
   const L = S.lesson, C = L.content, pr = L.progress; pr.output = pr.output || {};
-  const t = C.output_task;
-  box.innerHTML = stepsHTML(pr, 'output') + `<div class="card"><h3>產出任務</h3><div style="font-size:15px">${esc(t.scene_zh)}</div><div class="hint">${esc(t.scene_en)}</div>
+  mode = mode || pr.output.mode || 'scene';
+  const DIARY = { scene_zh: '自由日記：用英文說或寫今天發生的事、心情、或任何想講的。說錯、文法錯都沒關係，先講出來。', scene_en: 'Free diary', starter_en: 'How was your day? Tell me anything.' };
+  const t = mode === 'diary' ? DIARY : C.output_task;
+  box.innerHTML = stepsHTML(pr, 'output') + `<div class="card"><div class="row between"><h3 style="margin:0">自由輸出</h3><div class="chips"><button class="chip ${mode === 'scene' ? 'on' : ''}" data-m="scene" style="padding:6px 10px;font-size:13px">情境回應</button><button class="chip ${mode === 'diary' ? 'on' : ''}" data-m="diary" style="padding:6px 10px;font-size:13px">自由日記</button></div></div><div style="font-size:15px;margin-top:8px">${esc(t.scene_zh)}</div><div class="hint">${esc(t.scene_en)}</div>
     <div class="row between" style="margin-top:12px;padding:10px 12px;background:var(--bg);border-radius:12px"><div><div class="meta">對方說：</div><div class="en">${esc(t.starter_en)}</div></div>${speakBtn(t.starter_en)}</div>
     <div class="hint" style="margin-top:12px">用英文回應，長度不限，一句也可以。打字或按麥克風都行。</div>
     <div class="row" style="margin-top:8px;align-items:flex-start"><textarea id="oIn" placeholder="Hello, …"></textarea><button class="mic" id="oMic">${MIC}</button></div>
     <button class="btn full" id="oSubmit">送給老師看</button><div id="oFb"></div></div>`;
+  $$('[data-m]', box).forEach(c => c.onclick = () => renderOutput(box, wi, c.dataset.m));
   $('#oMic').onclick = () => listen(tx => { const ta = $('#oIn'); ta.value = (ta.value + ' ' + tx).trim(); }, $('#oMic'));
   $('#oSubmit').onclick = async () => {
     const txt = $('#oIn').value.trim(); if (!txt) return toast('先寫或說一句');
@@ -367,7 +489,7 @@ function renderOutput(box, wi) {
       <div class="feedback"><b>3. 更自然的說法</b><div class="row between" style="margin-top:6px"><div class="en">${esc(g.natural_en)}</div>${speakBtn(g.natural_en)}</div><div class="zh">${esc(g.natural_zh)}</div></div>
       <div class="hint" style="margin-top:10px">${esc(g.praise_zh)}${added ? `　已加入 ${added} 張句子卡。` : ''}</div>
       <button class="btn full" id="oDone">完成今天的課</button>`;
-    pr.output = { done: true, text: txt, result: g };
+    pr.output = { done: true, mode, text: txt, result: g };
     $('#oDone').onclick = async () => { await sb.from('lessons').update({ progress: pr, completed_at: new Date().toISOString() }).eq('id', L.id); renderLesson(box, wi); };
   };
 }
@@ -385,6 +507,7 @@ async function renderFinish(box, wi) {
   box.innerHTML = stepsHTML(S.lesson.progress, 'done') + `<div class="card"><h3>今天完成了，辛苦了！</h3>
     <div class="stat" style="margin-top:8px"><div class="card"><div class="meta">今天新單字</div><div class="big">${words.length}</div></div><div class="card"><div class="meta">今天新句子卡</div><div class="big">${sents.length}</div></div></div>
     ${newCards?.length ? `<div style="margin-top:12px">${newCards.map(c => `<div class="line"><span class="tag ${c.kind}">${c.kind === 'word' ? '字' : '句'}</span><div class="txt"><div class="en" style="font-size:15px">${esc(c.en)}</div><div class="zh">${esc(c.zh)}</div></div>${speakBtn(c.en)}</div>`).join('')}</div>` : ''}
+    ${S.lesson.progress.drill?.stats ? `<div class="stat" style="margin-top:12px"><div class="card"><div class="meta">今天快答率</div><div class="big">${Math.round(S.lesson.progress.drill.stats.fast / Math.max(1, S.lesson.progress.drill.stats.n) * 100)}%</div></div><div class="card"><div class="meta">平均反應</div><div class="big">${S.lesson.progress.drill.stats.avg}<span style="font-size:16px">s</span></div></div></div>` : ''}
     <div class="hint" style="margin-top:12px">明天主題：${esc(nextRow?.topic_zh || '繼續本週主題')}</div>
     <div class="feedback" style="margin-top:12px">本週任務目標達成度：完成 ${done?.length || 0} / ${wi.dayInWeek} 天（${rate}%）${task?.[0] ? `，任務測驗 ${task[0].score} 分` : ''}。</div>
     ${wi.dayInWeek >= 6 && !task?.[0] && !wi.row?.is_buffer ? `<button class="btn full" id="weeklyTask">做本週任務測驗（3 題）</button>` : ''}
@@ -514,7 +637,7 @@ async function renderProgress() {
   const wi = weekInfo(); const weekStart = addDays(todayStr(), -(wi.dayInWeek - 1));
   const doneWeek = (lessons || []).filter(l => l.completed_at && l.lesson_date >= weekStart).length;
   const task = (asm || []).filter(a => a.kind === 'task' && a.created_at >= weekStart).pop();
-  const days = [...Array(14)].map((_, i) => { const d = addDays(since14, i); const l = (lessons || []).find(x => x.lesson_date === d); const pr = l?.progress || {}; const n = ['review', 'input', 'drill', 'output'].filter(k => pr[k]?.done).length; return { d, n }; });
+  const days = [...Array(14)].map((_, i) => { const d = addDays(since14, i); const l = (lessons || []).find(x => x.lesson_date === d); const pr = l?.progress || {}; const n = ['review', 'input', 'drill', 'read', 'output'].filter(k => pr[k]?.done).length; return { d, n }; });
   const counts = {}; (errs || []).forEach(e => counts[e.pattern] = (counts[e.pattern] || 0) + 1);
   const top5 = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => ({ k, v }));
   const u = (api || []).reduce((s, r) => ({ i: s.i + r.input_tokens, o: s.o + r.output_tokens, cr: s.cr + r.cache_read, cw: s.cw + r.cache_write }), { i: 0, o: 0, cr: 0, cw: 0 });
@@ -524,7 +647,7 @@ async function renderProgress() {
     <div class="stat"><div class="card"><div class="meta">估計字彙量</div><div class="big">${S.profile.vocab_est}</div><div class="meta">${esc(S.profile.cefr)}</div></div><div class="card"><div class="meta">連續完成</div><div class="big">${streak}</div><div class="meta">天</div></div></div>
     <div class="card" style="margin-top:12px"><h3>本週任務目標達成度</h3><div class="big" style="font-size:28px">${Math.round(doneWeek / wi.dayInWeek * 100)}%</div><div class="meta">完成 ${doneWeek} / ${wi.dayInWeek} 天${task ? `・任務測驗 ${task.score} 分` : '・任務測驗尚未做（第 6 天後開放）'}</div></div>
     <div class="card"><h3>字彙量趨勢（每週日重測）</h3>${lineChart(vocabPts, '字彙量趨勢')}</div>
-    <div class="card"><h3>最近 14 天完成率</h3><div style="display:flex;gap:4px;align-items:flex-end;height:70px">${days.map(x => `<div title="${x.d}：${x.n}/4 段" style="flex:1;height:${Math.max(6, x.n / 4 * 100)}%;background:${x.n === 4 ? '#c08a52' : x.n ? 'rgba(192,138,82,.45)' : '#e9e0d2'};border-radius:4px 4px 0 0"></div>`).join('')}</div><div class="row between meta" style="margin-top:4px"><span>${since14.slice(5)}</span><span>今天</span></div></div>
+    <div class="card"><h3>最近 14 天完成率</h3><div style="display:flex;gap:4px;align-items:flex-end;height:70px">${days.map(x => `<div title="${x.d}：${x.n}/5 段" style="flex:1;height:${Math.max(6, x.n / 5 * 100)}%;background:${x.n === 5 ? '#c08a52' : x.n ? 'rgba(192,138,82,.45)' : '#e9e0d2'};border-radius:4px 4px 0 0"></div>`).join('')}</div><div class="row between meta" style="margin-top:4px"><span>${since14.slice(5)}</span><span>今天</span></div></div>
     <div class="card"><h3>錯最多的 5 個句型</h3>${barChart(top5)}</div>
     <div class="card"><h3>卡庫</h3><div class="meta">單字 ${(cards || []).filter(c => c.kind === 'word').length} 張・句子 ${(cards || []).filter(c => c.kind === 'sentence').length} 張</div></div>
     <div class="card"><h3>本月老師費用（估）</h3><div class="big" style="font-size:24px">約 NT$ ${twd}</div><div class="meta">呼叫 ${(api || []).length} 次・輸入 ${u.i + u.cr + u.cw} 字元 token・輸出 ${u.o}</div></div>`;
@@ -552,6 +675,9 @@ async function renderSettings() {
       <div class="settings-row"><label>Claude 模型</label><select id="sModel"><option value="claude-opus-5-5" ${p.model === 'claude-opus-5-5' ? 'selected' : ''}>Opus 5.5（品質最好）</option><option value="claude-sonnet-5-5" ${p.model === 'claude-sonnet-5-5' ? 'selected' : ''}>Sonnet 5.5（省一半）</option></select></div>
       <div class="settings-row"><label>每天新單字上限</label><input type="number" id="sWords" min="3" max="20" value="${p.daily_new_words}"></div>
       <div class="settings-row"><label>朗讀速度</label><select id="sRate">${[0.7, 0.8, 0.9, 1.0].map(r => `<option value="${r}" ${Number(p.tts_rate) === r ? 'selected' : ''}>${r === 1 ? '正常' : r}</option>`).join('')}</select></div>
+      <div class="settings-row"><label>快答限時</label><select id="sLimit">${[2, 3, 4, 5].map(v => `<option value="${v}" ${Number(p.settings?.drill_limit ?? 3) === v ? 'selected' : ''}>${v} 秒</option>`).join('')}</select></div>
+      <div class="settings-row"><label>每個句型代換次數</label><select id="sReps">${[10, 15, 20].map(v => `<option value="${v}" ${Number(p.settings?.drill_reps ?? 20) === v ? 'selected' : ''}>${v} 次</option>`).join('')}</select></div>
+      <div class="settings-row"><label>快答時自動開麥克風</label><select id="sMic"><option value="1" ${p.settings?.auto_mic !== false ? 'selected' : ''}>開</option><option value="0" ${p.settings?.auto_mic === false ? 'selected' : ''}>關（用打字）</option></select></div>
       <div class="settings-row"><label>難度微調（目前 ${p.level_adjust}）</label><button class="btn ghost sm" id="sReset">歸零</button></div>
       <button class="btn full ghost" id="sSave">儲存設定</button></div>
     <div class="card"><h3>帳號</h3>
@@ -559,7 +685,7 @@ async function renderSettings() {
       <button class="btn full ghost" id="sRedo" style="margin-top:14px">重做程度評估</button>
       <button class="btn full danger" id="sLogout">登出</button></div>
     <div class="hint" style="text-align:center">英文教練 v1・資料存在你自己的 Supabase 專案</div>`;
-  $('#sSave').onclick = async () => { await saveProfile({ model: $('#sModel').value, daily_new_words: Number($('#sWords').value) || 12, tts_rate: Number($('#sRate').value) }); toast('已儲存'); };
+  $('#sSave').onclick = async () => { await saveProfile({ model: $('#sModel').value, daily_new_words: Number($('#sWords').value) || 12, tts_rate: Number($('#sRate').value), settings: { ...(p.settings || {}), drill_limit: Number($('#sLimit').value), drill_reps: Number($('#sReps').value), auto_mic: $('#sMic').value === '1' } }); toast('已儲存'); };
   $('#sReset').onclick = async () => { await saveProfile({ level_adjust: 0 }); toast('難度已歸零'); renderSettings(); };
   $('#sPwdBtn').onclick = async () => { const pw = $('#sPwd').value; if (pw.length < 8) return toast('密碼至少 8 碼'); const { error } = await sb.auth.updateUser({ password: pw }); toast(error ? '失敗：' + error.message : '密碼已更新'); };
   $('#sRedo').onclick = async () => { if (!confirm('要重做程度評估嗎？卡片與紀錄都會保留。')) return; await saveProfile({ assessed: false }); S.assess = { step: 'vocab' }; showPage('assess'); };
