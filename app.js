@@ -221,7 +221,7 @@ async function renderLesson(box, wi) {
       try {
         const weekStart = addDays(todayStr(), -(wi.dayInWeek - 1));
         const { data: learned } = await sb.from('cards').select('en').eq('user_id', S.user.id).eq('kind', 'word').gte('created_at', weekStart + 'T00:00:00');
-        const content = await coach('lesson_generate', { day_in_week: wi.dayInWeek, learned_words: (learned || []).map(c => c.en) }, '老師正在準備今天的課（約 30 秒）…');
+        const content = await coach('lesson_generate', { day_in_week: wi.dayInWeek, learned_words: (learned || []).map(c => c.en) }, '老師正在準備今天的課（約 1 分鐘，請稍等）…');
         L.content = content; await saveProgress(); renderLesson(box, wi);
       } catch (e) { toast(e.message, 5000); }
     };

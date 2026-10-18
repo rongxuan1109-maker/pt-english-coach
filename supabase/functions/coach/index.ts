@@ -73,7 +73,7 @@ const S = {
     type: "object", additionalProperties: false,
     required: ["sentences", "reference_zh"],
     properties: {
-      sentences: { type: "array", minItems: 3, maxItems: 4, items: { type: "object", additionalProperties: false, required: ["en"], properties: { en: { type: "string" } } } },
+      sentences: { type: "array", items: { type: "object", additionalProperties: false, required: ["en"], properties: { en: { type: "string" } } } },
       reference_zh: { type: "string", description: "整段的中文意思，用來比對學生的理解" },
     },
   },
@@ -82,14 +82,14 @@ const S = {
     required: ["cefr", "reading_score", "reading_feedback_zh", "writing_feedback_zh", "weaknesses", "start_stage", "start_week", "summary_zh", "cards"],
     properties: {
       cefr: { type: "string", enum: ["A1", "A2", "B1"] },
-      reading_score: { type: "integer", minimum: 0, maximum: 100 },
+      reading_score: { type: "integer" },
       reading_feedback_zh: { type: "string" },
       writing_feedback_zh: { type: "string" },
       weaknesses: { type: "object", additionalProperties: false, required: ["listening", "speaking", "reading", "writing"],
         properties: { listening: { type: "string" }, speaking: { type: "string" }, reading: { type: "string" }, writing: { type: "string" } } },
       start_stage: { type: "integer" }, start_week: { type: "integer" },
       summary_zh: { type: "string" },
-      cards: { type: "array", maxItems: 6, items: { type: "object", additionalProperties: false, required: ["kind", "en", "zh"], properties: { kind: { type: "string", enum: ["word", "sentence"] }, en: { type: "string" }, zh: { type: "string" } } } },
+      cards: { type: "array", items: { type: "object", additionalProperties: false, required: ["kind", "en", "zh"], properties: { kind: { type: "string", enum: ["word", "sentence"] }, en: { type: "string" }, zh: { type: "string" } } } },
     },
   },
   lesson_generate: {
@@ -98,18 +98,18 @@ const S = {
     properties: {
       title_zh: { type: "string" },
       grammar_point: { type: "object", additionalProperties: false, required: ["title_zh", "explain_zh", "examples"],
-        properties: { title_zh: { type: "string" }, explain_zh: { type: "string", description: "不用術語，用生活化比喻，3 句內" }, examples: { type: "array", maxItems: 3, items: { type: "object", additionalProperties: false, required: ["en", "zh"], properties: { en: { type: "string" }, zh: { type: "string" } } } } } },
-      dialogue: { type: "array", minItems: 6, maxItems: 10, items: { type: "object", additionalProperties: false, required: ["speaker", "en", "zh"], properties: { speaker: { type: "string" }, en: { type: "string" }, zh: { type: "string" } } } },
+        properties: { title_zh: { type: "string" }, explain_zh: { type: "string", description: "不用術語，用生活化比喻，3 句內" }, examples: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "zh"], properties: { en: { type: "string" }, zh: { type: "string" } } } } } },
+      dialogue: { type: "array", items: { type: "object", additionalProperties: false, required: ["speaker", "en", "zh"], properties: { speaker: { type: "string" }, en: { type: "string" }, zh: { type: "string" } } } },
       vocab: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "zh", "example_en"], properties: { en: { type: "string" }, zh: { type: "string" }, example_en: { type: "string" } } } },
-      questions: { type: "array", minItems: 3, maxItems: 3, items: { type: "object", additionalProperties: false, required: ["q_en", "q_zh", "options", "answer_index"], properties: { q_en: { type: "string" }, q_zh: { type: "string" }, options: { type: "array", minItems: 3, maxItems: 3, items: { type: "string" } }, answer_index: { type: "integer", minimum: 0, maximum: 2 } } } },
-      patterns: { type: "array", minItems: 2, maxItems: 3, description: "FSI 句型快答：每個句型先代換 20 次再轉換 10 次", items: { type: "object", additionalProperties: false, required: ["label", "base_en", "base_zh", "substitution", "transformation"], properties: {
+      questions: { type: "array", items: { type: "object", additionalProperties: false, required: ["q_en", "q_zh", "options", "answer_index"], properties: { q_en: { type: "string" }, q_zh: { type: "string" }, options: { type: "array", items: { type: "string" } }, answer_index: { type: "integer" } } } },
+      patterns: { type: "array", description: "FSI 句型快答：每個句型先代換 20 次再轉換 10 次", items: { type: "object", additionalProperties: false, required: ["label", "base_en", "base_zh", "substitution", "transformation"], properties: {
         label: { type: "string", description: "句型標籤，例如 I am from + 地方" },
         base_en: { type: "string" }, base_zh: { type: "string" },
-        substitution: { type: "array", minItems: 20, maxItems: 20, items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "提示詞，1 到 3 個字，例如 Japan / She / not" }, answer: { type: "string", description: "套進去之後的完整句子" } } } },
-        transformation: { type: "array", minItems: 10, maxItems: 10, items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "轉換指令，用中文短詞，例如 問句 / 否定 / 他 / 複數 / 過去" }, answer: { type: "string" } } } },
+        substitution: { type: "array", items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "提示詞，1 到 3 個字，例如 Japan / She / not" }, answer: { type: "string", description: "套進去之後的完整句子" } } } },
+        transformation: { type: "array", items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "轉換指令，用中文短詞，例如 問句 / 否定 / 他 / 複數 / 過去" }, answer: { type: "string" } } } },
       } } },
-      extra_drills: { type: "array", minItems: 4, maxItems: 6, items: { type: "object", additionalProperties: false, required: ["type", "instruction_zh", "prompt_en", "answer_en", "pattern"], properties: { type: { type: "string", enum: ["response", "expansion"] }, instruction_zh: { type: "string" }, prompt_en: { type: "string" }, answer_en: { type: "string" }, pattern: { type: "string" } } } },
-      reading_passage: { type: "object", additionalProperties: false, required: ["title_zh", "sentences"], properties: { title_zh: { type: "string" }, sentences: { type: "array", minItems: 6, maxItems: 8, items: { type: "object", additionalProperties: false, required: ["en", "zh"], properties: { en: { type: "string" }, zh: { type: "string" } } } } } },
+      extra_drills: { type: "array", items: { type: "object", additionalProperties: false, required: ["type", "instruction_zh", "prompt_en", "answer_en", "pattern"], properties: { type: { type: "string", enum: ["response", "expansion"] }, instruction_zh: { type: "string" }, prompt_en: { type: "string" }, answer_en: { type: "string" }, pattern: { type: "string" } } } },
+      reading_passage: { type: "object", additionalProperties: false, required: ["title_zh", "sentences"], properties: { title_zh: { type: "string" }, sentences: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "zh"], properties: { en: { type: "string" }, zh: { type: "string" } } } } } },
       output_task: { type: "object", additionalProperties: false, required: ["scene_zh", "scene_en", "starter_en"], properties: { scene_zh: { type: "string" }, scene_en: { type: "string" }, starter_en: { type: "string", description: "對方先講的一句英文" } } },
     },
   },
@@ -122,9 +122,9 @@ const S = {
     properties: {
       understandable: { type: "string", enum: ["yes", "mostly", "no"] },
       understandable_zh: { type: "string" },
-      errors: { type: "array", maxItems: 5, items: { type: "object", additionalProperties: false, required: ["said", "correct", "why_zh", "pattern"], properties: { said: { type: "string" }, correct: { type: "string" }, why_zh: { type: "string" }, pattern: { type: "string" } } } },
+      errors: { type: "array", items: { type: "object", additionalProperties: false, required: ["said", "correct", "why_zh", "pattern"], properties: { said: { type: "string" }, correct: { type: "string" }, why_zh: { type: "string" }, pattern: { type: "string" } } } },
       natural_en: { type: "string" }, natural_zh: { type: "string" }, praise_zh: { type: "string" },
-      cards: { type: "array", maxItems: 4, items: { type: "object", additionalProperties: false, required: ["kind", "en", "zh"], properties: { kind: { type: "string", enum: ["word", "sentence"] }, en: { type: "string" }, zh: { type: "string" } } } },
+      cards: { type: "array", items: { type: "object", additionalProperties: false, required: ["kind", "en", "zh"], properties: { kind: { type: "string", enum: ["word", "sentence"] }, en: { type: "string" }, zh: { type: "string" } } } },
     },
   },
   grade_review: {
@@ -137,11 +137,11 @@ const S = {
   },
   weekly_task: {
     type: "object", additionalProperties: false, required: ["tasks"],
-    properties: { tasks: { type: "array", minItems: 3, maxItems: 3, items: { type: "object", additionalProperties: false, required: ["task_zh", "prompt_en"], properties: { task_zh: { type: "string" }, prompt_en: { type: "string" } } } } },
+    properties: { tasks: { type: "array", items: { type: "object", additionalProperties: false, required: ["task_zh", "prompt_en"], properties: { task_zh: { type: "string" }, prompt_en: { type: "string" } } } } },
   },
   grade_task: {
     type: "object", additionalProperties: false, required: ["passed", "score", "feedback_zh"],
-    properties: { passed: { type: "boolean" }, score: { type: "integer", minimum: 0, maximum: 100 }, feedback_zh: { type: "string" } },
+    properties: { passed: { type: "boolean" }, score: { type: "integer" }, feedback_zh: { type: "string" } },
   },
 };
 
