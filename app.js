@@ -44,14 +44,17 @@ function speakList(texts) {
   texts.forEach(t => { const u = new SpeechSynthesisUtterance(t); u.lang = 'en-US'; if (voice) u.voice = voice; u.rate = Number(S.profile?.tts_rate ?? 0.9); speechSynthesis.speak(u); });
 }
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SR_ERR = { 'not-allowed': '麥克風被封鎖了：點網址列左邊的鎖頭或麥克風圖示 → 允許麥克風，再重新整理', 'service-not-allowed': '這個瀏覽器不允許語音服務（Safari 要先開系統設定的「聽寫」）', 'no-speech': '沒聽到聲音：按麥克風、等它變紅再開口', 'audio-capture': '找不到麥克風：檢查系統設定裡的輸入裝置', 'network': '語音辨識需要網路，請檢查連線', 'aborted': '' };
+const srErrMsg = e => SR_ERR[e?.error] ?? `語音辨識錯誤（${e?.error || '未知'}），改用打字也可以`;
 function listen(onResult, btn) {
-  if (!SR) { toast('這個瀏覽器不支援語音輸入，請改用打字'); return; }
+  if (!SR) { toast('這個瀏覽器不支援語音輸入（Firefox/Arc 不行），請用 Chrome 或 Safari，或改打字', 5000); return; }
   const r = new SR(); r.lang = 'en-US'; r.interimResults = false; r.maxAlternatives = 1;
-  btn?.classList.add('rec');
-  r.onresult = e => { onResult(e.results[0][0].transcript); };
-  r.onerror = e => { toast('聽不清楚，再試一次或改打字'); };
-  r.onend = () => btn?.classList.remove('rec');
-  try { r.start(); } catch { btn?.classList.remove('rec'); }
+  btn?.classList.add('rec'); let got = false;
+  r.onresult = e => { got = true; onResult(e.results[0][0].transcript); };
+  r.onerror = e => { const m = srErrMsg(e); if (m) toast(m, 6000); };
+  r.onend = () => { btn?.classList.remove('rec'); if (!got && !r._err) toast('沒收到語音，再按一次麥克風、變紅後再講', 3000); };
+  r.onerror = e => { r._err = true; const m = srErrMsg(e); if (m) toast(m, 6000); };
+  try { r.start(); } catch (e) { btn?.classList.remove('rec'); toast('麥克風啟動失敗：' + e.message, 5000); }
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-say]'); if (b) speak(b.dataset.say);
@@ -251,7 +254,7 @@ async function renderReview(box, wi) {
     const isWord = c.kind === 'word';
     box.innerHTML = stepsHTML(pr, 'review') + `<div class="card"><div class="meta">複習 ${Math.min(doneCount + 1, total)} / ${total}${retried.has(c.id) ? '（重排）' : ''}</div>
       <div class="progress"><div style="width:${doneCount / total * 100}%"></div></div>
-      <div style="margin:12px 0">${(!isWord && c.context && !/快答：/.test(c.context)) ? `<div class="meta">情境</div><div style="font-size:15px">${esc(c.context)}</div>` : ''}
+      <div style="margin:12px 0">${(!isWord && c.context && !/快答：/.test(c.context)) ? `<div class="meta">情境</div><div style="font-size:15px">${esc(c.context.replace(/^產出任務：/, '').slice(0, 40))}</div>` : ''}
         ${(!isWord && S.profile.cefr === 'B1' && c.zh) ? `<button class="btn ghost sm" id="revZh" style="margin-top:6px">看中文提示</button><div class="zh hidden" id="revZhBox" style="font-size:17px;color:var(--ink)">${esc(c.zh)}</div>` : `<div class="zh" style="font-size:17px;color:var(--ink)">${esc(c.zh || '（沒有中文，直接唸出英文）')}</div>`}
         ${(isWord && c.context) ? `<div class="hint">${esc(c.context)}</div>` : ''}</div>
       ${isWord ? `<div class="hint">這個字的英文是？想好再翻開。</div><button class="btn ghost full" id="reveal">翻開答案</button><div id="ans" class="hidden" style="margin-top:12px"><div class="row between"><div class="en">${esc(c.en)}</div>${speakBtn(c.en)}</div><div class="row" style="margin-top:12px;gap:8px"><button class="btn full ghost" id="bad" style="margin:0">忘了</button><button class="btn full" id="good" style="margin:0">記得</button></div></div>`
@@ -415,7 +418,7 @@ function renderDrill(box, wi, key = 'drill') {
       if (res.isFinal) { const alts = [...res].map(a => a.transcript); const best = alts.sort((a, b) => sim(b, it.answer) - sim(a, it.answer))[0]; $('#qIn').value = best; settle(best); }
       else $('#qIn').value = res[0].transcript;
     };
-    r.onerror = () => { $('#qMic').classList.remove('rec'); };
+    r.onerror = e => { $('#qMic').classList.remove('rec'); if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed' || e?.error === 'audio-capture') toast(srErrMsg(e), 6000); };
     r.onend = () => { if (!answered) $('#qMic').classList.remove('rec'); };
     try { r.start(); $('#qMic').classList.add('rec'); } catch { $('#qMic').classList.remove('rec'); }
   };
