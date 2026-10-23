@@ -47,7 +47,10 @@ const RULES = `你是一位專門教「台灣成人初學者」的英文教練�
 7. 說明用繁體中文（台灣用語），練習用英文。學生 B1 以後再逐步增加英文說明。
 8. 糾錯要具體：哪個詞、為什麼錯、該怎麼說。不要只說「很好」。語氣溫暖、鼓勵、像並肩作戰的夥伴，但誠實。
 9. 每個英文句子都要附簡短中文意思（學生聽讀用）。
-10. 你輸出的內容一律符合指定的 JSON 結構，不要多加解釋文字。`;
+10. 你輸出的內容一律符合指定的 JSON 結構，不要多加解釋文字。
+11. 翻譯是學步車，不是敵人：學生初期會中翻英很正常，目標是靠大量重複讓「畫面直接接英文」自己長出來。所以練習的提示盡量用英文或畫面（表情圖示、情境），中文只當第二層提示；學生到 B1 後中文提示淡出。
+12. 「講自己的話」要給骨架：自由輸出前先給 5 個開口語塊（I think… / because… / Actually… / The thing is… / Let me see…這類），同一題讓學生講三次（60 秒→45 秒→30 秒），前兩次只回一句更自然的說法、不批改，第三次才完整回饋並指出三次之間的進步。
+13. 訓練時間不設上限：學生想練多久就練多久。操練題可以多（應答／擴展各 4 到 5 題），學生要求「加練」時隨時生成新的句型操練。`;
 
 type Profile = {
   cefr: string; vocab_est: number; level_adjust: number; stage: number; week: number;
@@ -66,6 +69,17 @@ function stateBlock(p: Profile, cur: any, topErrors: string[]) {
 - 常錯句型（優先在操練中加強）：${topErrors.length ? topErrors.join("；") : "尚無紀錄"}
 - 其他備註：${p.error_summary || "無"}`;
 }
+
+// ===== 共用結構 =====
+const PATTERN_ITEMS = { type: "array", description: "FSI 句型快答：每個句型先代換 20 次再轉換 10 次", items: { type: "object", additionalProperties: false, required: ["label", "base_en", "base_zh", "substitution", "transformation"], properties: {
+  label: { type: "string", description: "句型標籤，例如 I am from + 地方" },
+  base_en: { type: "string" }, base_zh: { type: "string" },
+  substitution: { type: "array", items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "提示詞，1 到 3 個字，例如 Japan / She / not" }, answer: { type: "string", description: "套進去之後的完整句子" } } } },
+  transformation: { type: "array", items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "轉換指令，用中文短詞，例如 問句 / 否定 / 他 / 複數 / 過去" }, answer: { type: "string" } } } },
+} } };
+const EXTRA_DRILL_ITEMS = { type: "array", items: { type: "object", additionalProperties: false, required: ["type", "instruction_zh", "prompt_en", "answer_en", "pattern"], properties: { type: { type: "string", enum: ["response", "expansion"] }, instruction_zh: { type: "string" }, prompt_en: { type: "string" }, answer_en: { type: "string" }, pattern: { type: "string" } } } };
+const NARRATE_ITEMS = { type: "array", description: "畫面旁白：5 個日常動作，只給表情圖示與英文問句，不給中文，學生看畫面直接說英文", items: { type: "object", additionalProperties: false, required: ["emoji", "question_en", "answer_en", "zh"], properties: { emoji: { type: "string", description: "1 到 3 個表情圖示組成的畫面，例如 🚰🥛 或 🚶‍♂️🏥" }, question_en: { type: "string", description: "老師問的英文問句，例如 What are you doing?" }, answer_en: { type: "string", description: "參考答案，一句、在字數上限內，例如 I'm pouring water." }, zh: { type: "string", description: "參考答案的中文，只在學生看答案時顯示" } } } };
+const CHUNK_ITEMS = { type: "array", description: "開口語塊：5 個講自己想法時的句子骨架", items: { type: "object", additionalProperties: false, required: ["en", "zh", "when_zh"], properties: { en: { type: "string", description: "例如 I think… / because… / Actually, … / The thing is, … / Let me see…" }, zh: { type: "string" }, when_zh: { type: "string", description: "什麼時候用，8 字內，例如「要講看法時」" } } } };
 
 // ===== 各動作的 JSON 結構 =====
 const S = {
@@ -94,7 +108,7 @@ const S = {
   },
   lesson_generate: {
     type: "object", additionalProperties: false,
-    required: ["title_zh", "grammar_point", "dialogue", "vocab", "questions", "patterns", "extra_drills", "reading_passage", "output_task"],
+    required: ["title_zh", "grammar_point", "dialogue", "vocab", "questions", "patterns", "extra_drills", "narrate", "chunks", "reading_passage", "output_task"],
     properties: {
       title_zh: { type: "string" },
       grammar_point: { type: "object", additionalProperties: false, required: ["title_zh", "explain_zh", "examples"],
@@ -102,25 +116,31 @@ const S = {
       dialogue: { type: "array", items: { type: "object", additionalProperties: false, required: ["speaker", "en", "zh"], properties: { speaker: { type: "string" }, en: { type: "string" }, zh: { type: "string" } } } },
       vocab: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "zh", "example_en"], properties: { en: { type: "string" }, zh: { type: "string" }, example_en: { type: "string" } } } },
       questions: { type: "array", items: { type: "object", additionalProperties: false, required: ["q_en", "q_zh", "options", "answer_index"], properties: { q_en: { type: "string" }, q_zh: { type: "string" }, options: { type: "array", items: { type: "string" } }, answer_index: { type: "integer" } } } },
-      patterns: { type: "array", description: "FSI 句型快答：每個句型先代換 20 次再轉換 10 次", items: { type: "object", additionalProperties: false, required: ["label", "base_en", "base_zh", "substitution", "transformation"], properties: {
-        label: { type: "string", description: "句型標籤，例如 I am from + 地方" },
-        base_en: { type: "string" }, base_zh: { type: "string" },
-        substitution: { type: "array", items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "提示詞，1 到 3 個字，例如 Japan / She / not" }, answer: { type: "string", description: "套進去之後的完整句子" } } } },
-        transformation: { type: "array", items: { type: "object", additionalProperties: false, required: ["cue", "answer"], properties: { cue: { type: "string", description: "轉換指令，用中文短詞，例如 問句 / 否定 / 他 / 複數 / 過去" }, answer: { type: "string" } } } },
-      } } },
-      extra_drills: { type: "array", items: { type: "object", additionalProperties: false, required: ["type", "instruction_zh", "prompt_en", "answer_en", "pattern"], properties: { type: { type: "string", enum: ["response", "expansion"] }, instruction_zh: { type: "string" }, prompt_en: { type: "string" }, answer_en: { type: "string" }, pattern: { type: "string" } } } },
+      patterns: PATTERN_ITEMS,
+      extra_drills: EXTRA_DRILL_ITEMS,
       reading_passage: { type: "object", additionalProperties: false, required: ["title_zh", "sentences"], properties: { title_zh: { type: "string" }, sentences: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "zh"], properties: { en: { type: "string" }, zh: { type: "string" } } } } } },
+      narrate: NARRATE_ITEMS,
+      chunks: CHUNK_ITEMS,
       output_task: { type: "object", additionalProperties: false, required: ["scene_zh", "scene_en", "starter_en"], properties: { scene_zh: { type: "string" }, scene_en: { type: "string" }, starter_en: { type: "string", description: "對方先講的一句英文" } } },
     },
+  },
+  narrate_set: { type: "object", additionalProperties: false, required: ["narrate"], properties: { narrate: NARRATE_ITEMS } },
+  chunks_set: { type: "object", additionalProperties: false, required: ["chunks"], properties: { chunks: CHUNK_ITEMS } },
+  extra_patterns: { type: "object", additionalProperties: false, required: ["patterns", "extra_drills"], properties: { patterns: PATTERN_ITEMS, extra_drills: EXTRA_DRILL_ITEMS } },
+  output_quick: {
+    type: "object", additionalProperties: false, required: ["understood_zh", "natural_en", "natural_zh", "tip_zh"],
+    properties: { understood_zh: { type: "string", description: "一句話說你聽懂他想講什麼" }, natural_en: { type: "string", description: "把學生講的改成一句更自然、不超過程度的英文" }, natural_zh: { type: "string" }, tip_zh: { type: "string", description: "下一次重講時的一個小建議，10 字內" } },
   },
   grade_drill: {
     type: "object", additionalProperties: false, required: ["correct", "feedback_zh", "correct_en", "correct_zh", "pattern"],
     properties: { correct: { type: "boolean" }, feedback_zh: { type: "string" }, correct_en: { type: "string" }, correct_zh: { type: "string" }, pattern: { type: "string" } },
   },
   grade_output: {
-    type: "object", additionalProperties: false, required: ["understandable", "understandable_zh", "errors", "natural_en", "natural_zh", "praise_zh", "cards"],
+    type: "object", additionalProperties: false, required: ["understandable", "understandable_zh", "errors", "natural_en", "natural_zh", "praise_zh", "rounds_note_zh", "chunks_used", "cards"],
     properties: {
       understandable: { type: "string", enum: ["yes", "mostly", "no"] },
+      rounds_note_zh: { type: "string", description: "若學生講了多次，指出幾次之間的進步（更長、更順、用了語塊）；只講一次就給空字串" },
+      chunks_used: { type: "array", items: { type: "string" }, description: "學生用到的開口語塊" },
       understandable_zh: { type: "string" },
       errors: { type: "array", items: { type: "object", additionalProperties: false, required: ["said", "correct", "why_zh", "pattern"], properties: { said: { type: "string" }, correct: { type: "string" }, why_zh: { type: "string" }, pattern: { type: "string" } } } },
       natural_en: { type: "string" }, natural_zh: { type: "string" }, praise_zh: { type: "string" },
@@ -168,9 +188,11 @@ function buildPrompt(action: string, p: any, profile: Profile): { user: string; 
 3. vocab：今天的新單字，最多 ${Math.min(profile.daily_new_words, 12)} 個，從對話裡挑，附中文與一個例句。寧少而熟。
 4. questions：3 題理解題（用簡單英文問、附中文提示、3 選 1）。
 5. patterns：FSI 句型快答，2 到 3 個句型（從本週核心句型挑，${p.day_in_week && p.day_in_week > 1 ? "優先針對學生常錯句型，" : ""}每天換不同的）。每個句型給：基礎句 base_en（附中文）、substitution 代換 20 題（cue 是 1 到 3 個字的提示詞，學生要在 3 秒內把它套進句子，answer 是完整句；提示詞要連鎖變化，像 Japan → She → Korea → They → not → Taiwan…，每次只換一個位置，後一題接著前一題的句子變）、transformation 轉換 10 題（cue 用中文短指令：問句／否定／他／她／複數／過去／縮寫…，從 base_en 出發，answer 是完整句）。所有句子都要在字數上限內、只用學生懂的字。
-6. extra_drills：4 到 6 題應答（response）與擴展（expansion）操練，材料只用對話裡的句子與核心句型。
-7. reading_passage：一段給學生「大聲朗讀」的短文 6 到 8 句，當週主題、第一人稱或生活小故事，每句在字數上限內，附中文（預設不顯示）。
-8. output_task：一個真實情境讓學生用英文回應，給對方先講的一句英文。
+6. extra_drills：8 到 10 題應答（response）與擴展（expansion）操練各半，材料只用對話裡的句子與核心句型。擴展題的 prompt_en 用「基礎句 + 新零件」的寫法（例如 There is a cup on the table. → spoon），answer_en 是加進去之後的完整句。
+7. reading_passage：一段給學生「大聲朗讀」的短文 6 到 8 句，當週主題、第一人稱或生活小故事，每句在字數上限內，附中文（預設不顯示）。學生會先看著讀、再遮住憑記憶說，所以每句要短、有畫面。
+8. narrate：5 個「畫面旁白」：日常動作（倒水、走路去上班、吃早餐、打電話、看手機…）用 1 到 3 個表情圖示當畫面，加一個英文問句（What are you doing? / What is she doing?），參考答案一句用本週句型或現在進行式，不給中文提示（zh 只在看答案時顯示）。
+9. chunks：5 個「開口語塊」，給學生講自己想法時當骨架（I think… / because… / Actually, … / The thing is, … / Let me see… / I'm not sure, but…），依本週主題挑最用得上的 5 個，附中文與「什麼時候用」。
+10. output_task：一個真實情境讓學生用英文回應，給對方先講的一句英文。學生會把同一題講三次，所以情境要有「可以多講一點」的空間（例如：介紹自己和今天的計畫），不要只能回一句的題目。
 ${p.is_buffer ? "【注意】本週是緩衝週：對話與操練只能用前幾週學過的內容複習，vocab 給空陣列。" : ""}` };
     case "grade_drill":
       return { schema: S.grade_drill, max_tokens: 800, effort: "low",
@@ -180,8 +202,23 @@ ${p.is_buffer ? "【注意】本週是緩衝週：對話與操練只能用前幾
     case "grade_output":
       return { schema: S.grade_output, max_tokens: 2500, effort: "medium",
         user: `產出任務：${JSON.stringify(p.task)}
-學生用英文的回應：「${p.user_text}」
-請回饋固定三項：對方聽得懂嗎（yes/mostly/no 加一句中文說明）、哪裡講錯（每個錯誤：學生說的、正確說法、為什麼、句型標籤）、更自然的說法（一段、不超過學生程度、附中文）。另外給一句真誠的鼓勵，以及最多 4 張值得收的卡片（從錯誤或自然說法來）。不要代寫超出學生程度的句子。` };
+${p.rounds?.length > 1 ? `學生把同一題講了 ${p.rounds.length} 次（限時 ${p.rounds.map((r: any) => r.limit + "秒").join("→")}）：\n${p.rounds.map((r: any, i: number) => `第 ${i + 1} 次（${r.words} 字、用了 ${r.secs} 秒）：「${r.text}」`).join("\n")}\n請以最後一次為主評分。` : `學生用英文的回應：「${p.user_text}」`}
+可用的開口語塊：${JSON.stringify(p.chunks ?? [])}
+請回饋固定三項：對方聽得懂嗎（yes/mostly/no 加一句中文說明）、哪裡講錯（每個錯誤：學生說的、正確說法、為什麼、句型標籤）、更自然的說法（一段、不超過學生程度、附中文）。另外：rounds_note_zh 指出幾次之間的進步（講了幾次才有，只講一次給空字串）、chunks_used 列出學生用到的語塊、一句真誠的鼓勵、最多 4 張值得收的卡片（從錯誤或自然說法來）。不要代寫超出學生程度的句子。` };
+    case "output_quick":
+      return { schema: S.output_quick, max_tokens: 600, effort: "low",
+        user: `產出任務：${JSON.stringify(p.task)}
+學生第 ${p.round} 次講（限時 ${p.limit} 秒）：「${p.user_text}」
+這是中間回合，不要批改、不要列錯誤。只做三件事：一句話說你聽懂他想講什麼；把他講的內容整理成一句更自然、不超過他程度的英文（他下一次重講會試著用上）；給一個 10 字內的小建議（例如「加一句為什麼」「用 because 接下去」「講慢一點沒關係」）。` };
+    case "narrate_set":
+      return { schema: S.narrate_set, max_tokens: 1200, effort: "low",
+        user: `請出 5 題「畫面旁白」：日常動作用 1 到 3 個表情圖示當畫面（例如 🚰🥛、🚶‍♂️🏥、☕️📱），加一個英文問句（What are you doing? / What is he doing?），參考答案一句、用現在進行式或本週句型、在字數上限內，不要和這些重複：${JSON.stringify(p.avoid ?? [])}。` };
+    case "chunks_set":
+      return { schema: S.chunks_set, max_tokens: 800, effort: "low",
+        user: `請給 5 個「開口語塊」讓學生講自己想法時當骨架（I think… / because… / Actually, … / The thing is, … / Let me see… / I'm not sure, but… 這類），依本週主題與程度挑最用得上的 5 個，附中文與 8 字內的「什麼時候用」。` };
+    case "extra_patterns":
+      return { schema: S.extra_patterns, max_tokens: 9000, effort: "low",
+        user: `學生要「加練」。請生成 ${p.count ?? 2} 個新的 FSI 句型快答${p.topic ? `，主題：${p.topic}` : "，從本週與之前學過的核心句型挑"}${p.focus?.length ? `，優先練這些常錯句型：${p.focus.join("；")}` : ""}。每個句型：基礎句 base_en（附中文）、substitution 代換 20 題（提示詞 1 到 3 個字、連鎖變化、每次只換一個位置）、transformation 轉換 10 題（中文短指令：問句／否定／他／她／複數／過去）。另外 6 題應答／擴展（extra_drills）。不要和這些基礎句重複：${JSON.stringify(p.avoid ?? [])}。所有句子在字數上限內、只用學生懂的字。` };
     case "grade_review":
       return { schema: S.grade_review, max_tokens: 500, effort: "low",
         user: `句子卡：英文「${p.card?.en}」、中文「${p.card?.zh}」。學生看中文後說出的英文：「${p.user_answer}」。意思與文法都對就算對（同義說法也算），錯就一句話說哪裡錯。` };

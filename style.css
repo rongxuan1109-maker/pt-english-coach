@@ -109,3 +109,8 @@ svg.chart text{font-size:10px;fill:var(--sub)}
 .settings-row select,.settings-row input{width:auto;min-width:120px;padding:8px 10px}
 .vocab-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .vocab-grid .card{margin:0;padding:10px 12px}
+
+/* v2：講三次 / 語塊 */
+.rounds{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0}
+.chip.chunk{display:inline-flex;align-items:baseline;gap:4px}
+.chip.chunk:active{background:var(--glow)}
